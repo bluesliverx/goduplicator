@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -98,12 +99,16 @@ func forwardZeroCopy(from net.Conn, to net.Conn, closeCh chan error) {
 	defer safeClose(toFile)
 
 	for {
-		_, err = unix.Splice(int(fromFile.Fd()), nullPtr, p[1], nullPtr, MaxInt, SPLICE_F_MOVE)
+		fromFd := int(fromFile.Fd())
+		_ = syscall.SetNonblock(fromFd, true)
+		_, err = unix.Splice(fromFd, nullPtr, p[1], nullPtr, MaxInt, SPLICE_F_MOVE)
 		if err != nil {
 			closeCh <- fmt.Errorf("error while splicing from conn to pipe: %w", err)
 			return
 		}
-		_, err = unix.Splice(p[0], nullPtr, int(toFile.Fd()), nullPtr, MaxInt, SPLICE_F_MOVE)
+		toFd := int(toFile.Fd())
+		_ = syscall.SetNonblock(toFd, true)
+		_, err = unix.Splice(p[0], nullPtr, toFd, nullPtr, MaxInt, SPLICE_F_MOVE)
 		if err != nil {
 			closeCh <- fmt.Errorf("error while splicing from pipe to conn: %w", err)
 			return
@@ -179,7 +184,9 @@ func forwardAndZeroCopy(from net.Conn, to net.Conn, mirrors []mirror, closeCh, e
 	}
 
 	for {
-		_, err = unix.Splice(int(fromFile.Fd()), nullPtr, p[1], nullPtr, MaxInt, SPLICE_F_MOVE)
+		fromFd := int(fromFile.Fd())
+		_ = syscall.SetNonblock(fromFd, true)
+		_, err = unix.Splice(fromFd, nullPtr, p[1], nullPtr, MaxInt, SPLICE_F_MOVE)
 		if err != nil {
 			closeCh <- fmt.Errorf("error while splicing from conn to pipe: %w", err)
 			return
@@ -204,7 +211,9 @@ func forwardAndZeroCopy(from net.Conn, to net.Conn, mirrors []mirror, closeCh, e
 			}
 		}
 
-		_, err = unix.Splice(p[0], nullPtr, int(toFile.Fd()), nullPtr, int(nteed), SPLICE_F_MOVE)
+		toFd := int(toFile.Fd())
+		_ = syscall.SetNonblock(toFd, true)
+		_, err = unix.Splice(p[0], nullPtr, toFd, nullPtr, int(nteed), SPLICE_F_MOVE)
 		if err != nil {
 			closeCh <- fmt.Errorf("error while splice(): %w", err)
 			return
