@@ -30,6 +30,10 @@ type mirror struct {
 	closed uint32
 }
 
+func safeClose(file *os.File) {
+	_ = file.Close()
+}
+
 func readAndDiscard(m mirror, closeCh chan error) {
 	for {
 		var b [defaultBufferSize]byte
@@ -84,12 +88,14 @@ func forwardZeroCopy(from net.Conn, to net.Conn, closeCh chan error) {
 		closeCh <- fmt.Errorf("error while creating File() from incoming connection: %w", err)
 		return
 	}
+	defer safeClose(fromFile)
 
 	toFile, err := to.(*net.TCPConn).File()
 	if err != nil {
 		closeCh <- fmt.Errorf("error while creating File() from outgoing connection: %w", err)
 		return
 	}
+	defer safeClose(toFile)
 
 	for {
 		_, err = unix.Splice(int(fromFile.Fd()), nullPtr, p[1], nullPtr, MaxInt, SPLICE_F_MOVE)
@@ -128,12 +134,14 @@ func forwardAndZeroCopy(from net.Conn, to net.Conn, mirrors []mirror, closeCh, e
 		errorCh <- fmt.Errorf("error while creating File() from incoming connection: %w", err)
 		return
 	}
+	defer safeClose(fromFile)
 
 	toFile, err := to.(*net.TCPConn).File()
 	if err != nil {
 		errorCh <- fmt.Errorf("error while creating File() from outgoing connection: %w", err)
 		return
 	}
+	defer safeClose(toFile)
 
 	for _, m := range mirrors {
 		mFile, err := m.conn.(*net.TCPConn).File()
@@ -186,7 +194,8 @@ func forwardAndZeroCopy(from net.Conn, to net.Conn, mirrors []mirror, closeCh, e
 
 			nteed, err = unix.Tee(p[0], m.mirrorPipe[1], MaxInt, SPLICE_F_MOVE)
 			if err != nil {
-				m.conn.Close()
+				_ = m.conn.Close()
+				safeClose(m.mirrorFile)
 				atomic.StoreUint32(&m.closed, 1)
 				select {
 				case errorCh <- fmt.Errorf("error while tee(): %w", err):
@@ -304,6 +313,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("error while listening: %s", err)
 	}
+	defer l.Close()
 
 	var connNo uint64
 
